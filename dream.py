@@ -12,14 +12,16 @@ import json
 import train_dreambooth
 from natsort import natsorted
 import torch
-from torch import autocast
 from diffusers import StableDiffusionPipeline, DDIMScheduler
 import gradio as gr
 import sys
 import glob
 import datetime
+from torch.cuda.amp.autocast_mode import autocast
+
 
 MAX_TRAIN_STEPS = 2000
+
 
 class DreamboothPathManager():
   def __init__(self, rootDir, personId):
@@ -108,7 +110,7 @@ class DreamboothModelMaker():
         "--lr_warmup_steps=0",
         "--num_class_images=50",
         "--sample_batch_size=4",
-        f"--max_train_steps={MAX_TRAIN_STEPS}",  
+        f"--max_train_steps={MAX_TRAIN_STEPS}",
         "--save_interval=10000",
         '--concepts_list', self.getConceptsListFilePath()
     ]
@@ -130,13 +132,14 @@ class DreamboothImageGenerator:
     self.g_cuda.manual_seed(seed)
     self.tokenId = 'sks'
 
-  def generateImages(self, prompt = "photo of @me in a bucket", subdir = "x"):
+  def generateImages(self, prompt="photo of @me in a bucket", subdir="x"):
     #@title Run for generating images.
     # @param {type:"string"}
     seed = 52362  # @param {type:"number"}
     self.g_cuda.manual_seed(seed)
 
-    prompt = self.replacePromptPlaceholder(prompt, suffix = "face like @me hair like @me eyes like @me")
+    prompt = self.replacePromptPlaceholder(
+        prompt, suffix="face like @me hair like @me eyes like @me")
     negative_prompt = ""  # @param {type:"string"}
     num_samples = 4  # @param {type:"number"}
     guidance_scale = 7.5  # @param {type:"number"}
@@ -145,7 +148,7 @@ class DreamboothImageGenerator:
     width = 512  # @param {type:"number"}
 
     print(f"{prompt}")
-    with autocast("cuda"), torch.inference_mode():
+    with autocast(True), torch.inference_mode():
         images = self.pipe(
             prompt,
             height=height,
@@ -160,14 +163,15 @@ class DreamboothImageGenerator:
     # Place images in subdir and put the prompt in prompt.txt
     directory = f"{self.pathManager.getGeneratedImages()}/{subdir}"
     os.makedirs(directory, exist_ok=True)
-    imagePrefix = ''.join(random.choices(string.ascii_lowercase + string.digits, k=5))
+    imagePrefix = ''.join(random.choices(
+        string.ascii_lowercase + string.digits, k=5))
 
     for i, image in enumerate(images):
       image.save(f"{directory}/{imagePrefix}-img{i}.png")
     with open(f"{directory}/{imagePrefix}-prompt.txt", "w") as text_file:
-      print(prompt, file = text_file)
- 
-  def replacePromptPlaceholder(self, prompt, placeholder = "@me", suffix = ""):
+      print(prompt, file=text_file)
+
+  def replacePromptPlaceholder(self, prompt, placeholder="@me", suffix=""):
     prompt = f"{suffix} {prompt}"
     return prompt.replace(placeholder, f'{self.tokenId} person')
 
@@ -179,7 +183,7 @@ class DreamboothImageGenerator:
         prompt = self.replacePromptPlaceholder(prompt)
         print(f"prompt: {prompt}")
         negative_prompt = self.replacePromptPlaceholder(negative_prompt)
-        with torch.autocast("cuda"), torch.inference_mode():
+        with autocast(True), torch.inference_mode():
             return self.pipe(
                 prompt, height=int(height), width=int(width),
                 negative_prompt=negative_prompt,
@@ -207,25 +211,22 @@ class DreamboothImageGenerator:
                 gallery = gr.Gallery()
 
         run.click(inference, inputs=[prompt, negative_prompt, num_samples,
-                  height, width, num_inference_steps, guidance_scale], outputs=gallery, api_name = "api")
+                  height, width, num_inference_steps, guidance_scale], outputs=gallery, api_name="api")
         demo.launch(debug=True)
 
 
-
-
 db = orm.Database()
-
 
 class User(db.Entity):
   username = orm.Required(str, unique=True)
   dreamBoothContainers = orm.Set(lambda: DreamboothContainer)
 
+  @staticmethod
   def create(username):
     return User(username=username)
 
   def newDreamboothContainer(self):
     return DreamboothContainer(user=self, data_location="db")
-
 
 class DreamboothContainer(db.Entity):
   user = orm.Required(User)
@@ -266,7 +267,6 @@ db.bind(provider='mysql', host='127.0.0.1', user='root',
         passwd='kibbtzi', db='dreambooth', port=3306)
 db.generate_mapping(create_tables=True)
 
-
 class DreamboothRemoteRepository:
   def __init__(self, username, containerDict, boothDict):
     bucket = f"qqq-{containerDict['data_location']}"
@@ -285,13 +285,15 @@ class DreamboothRemoteRepository:
     completedProcess.check_returncode()
 
 
-class Driver:
+class  Driver:
+  @staticmethod
   def createUser(username):
     with orm.db_session:
       u1 = User.create(username)
       dbc = u1.newDreamboothContainer()
       db = dbc.newDreambooth("default")
 
+  @staticmethod
   def newBooth(username, realName):
     with orm.db_session:
       user = User.get(username=username)
@@ -299,6 +301,7 @@ class Driver:
       db = dbc.newDreambooth(realName)
       print(db)
 
+  @staticmethod
   def listBooths(username):
     with orm.db_session:
       user = User.get(username=username)
@@ -306,6 +309,7 @@ class Driver:
         for dreambooth in container.dreambooths:
           print(f"{dreambooth} {dreambooth.real_name} {dreambooth.token_name}")
 
+  @staticmethod
   def getBooth(username, id):
     print(f"getBooth: {username}, {id}")
     with orm.db_session:
@@ -316,12 +320,14 @@ class Driver:
       )
       return (query.first()[0].to_dict(), query.first()[1].to_dict())
 
+  @staticmethod
   def buildModel(username, boothId):
     (container, dreambooth) = Driver.getBooth(username, boothId)
     print(dreambooth)
 
     with tempfile.TemporaryDirectory() as tempdir:
-      remoteRepository = DreamboothRemoteRepository(username, container, dreambooth)
+      remoteRepository = DreamboothRemoteRepository(
+          username, container, dreambooth)
       remoteRepository.downloadBooth(tempdir)
 
       modelMaker = DreamboothModelMaker(
@@ -331,11 +337,13 @@ class Driver:
 
       remoteRepository.uploadBooth(tempdir)
 
+  @staticmethod
   def startBoothWebapp(username, boothId):
     (container, dreambooth) = Driver.getBooth(username, boothId)
 
     # Pull down model
-    remoteRepository = DreamboothRemoteRepository(username, container, dreambooth)
+    remoteRepository = DreamboothRemoteRepository(
+        username, container, dreambooth)
     with tempfile.TemporaryDirectory() as tempdir:
       remoteRepository.downloadBooth(tempdir)
       generator = DreamboothImageGenerator(
@@ -343,21 +351,24 @@ class Driver:
       generator.runWebApp()
       # starting building model
 
+  @staticmethod
   def generateImages(username, boothId, prompts):
     (container, dreambooth) = Driver.getBooth(username, boothId)
 
     # Pull down model
-    remoteRepository = DreamboothRemoteRepository(username, container, dreambooth)
+    remoteRepository = DreamboothRemoteRepository(
+        username, container, dreambooth)
     with tempfile.TemporaryDirectory() as tempdir:
       remoteRepository.downloadBooth(tempdir)
       generator = DreamboothImageGenerator(
           rootDir=tempdir, personId=dreambooth['token_name'])
-      imagesDir = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S");
+      imagesDir = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
       for prompt in prompts:
-        generator.generateImages(prompt = prompt, subdir = imagesDir)
+        generator.generateImages(prompt=prompt, subdir=imagesDir)
       remoteRepository.uploadBooth(tempdir)
       # starting building model
 
+  @staticmethod
   def processDreamBooths():
     # for all dreambooths is state STATE_WAITING_FOR_MODEL
 
@@ -369,6 +380,7 @@ class Driver:
     return
 
   # FIX-ME only allow jpg and png
+  @staticmethod
   def uploadPhotos(username, boothId, files):
     (container, dreambooth) = Driver.getBooth(username, boothId)
 
@@ -396,15 +408,12 @@ class Driver:
   def createPromptedDerivatives():
     return
 
-
 def executeListComand(args):
   Driver.listBooths(args.username)
-
 
 def executeShowBoothCommand(args):
   (container, dreambooth) = Driver.getBooth(args.username, args.booth_id)
   print(f"container: {container} booth: {dreambooth}")
-
 
 def executeBuildModel(args):
   (container, dreambooth) = Driver.getBooth(args.username, args.booth_id)
@@ -417,10 +426,8 @@ def executeStartBoothWebapp(args):
   print(f"container: {container} booth: {dreambooth}")
   Driver.startBoothWebapp(username=args.username, boothId=args.booth_id)
 
-
 def executeNewBooth(args):
   Driver.newBooth(username=args.username, realName=args.real_name)
-
 
 def executeUploadFiles(args):
   files = glob.glob(os.path.expanduser(args.file_path_glob))
@@ -435,7 +442,9 @@ def executeGenerateImages(args):
   (container, dreambooth) = Driver.getBooth(args.username, args.booth_id)
   print(f"container: {container} booth: {dreambooth}")
   # add in prompts
-  Driver.generateImages(boothId = args.booth_id, username = args.username, prompts = loadFileAsList(args.prompt_file))
+  Driver.generateImages(boothId=args.booth_id, username=args.username,
+                        prompts=loadFileAsList(args.prompt_file))
+
 
 def parseArgs(args):
   # create the top-level parser
@@ -477,7 +486,8 @@ def parseArgs(args):
   parserList = subparsers.add_parser('generate-images')
   parserList.add_argument('--username', type=str, required=True)
   parserList.add_argument('--booth-id', type=int, required=True)
-  parserList.add_argument('--prompt-file', type=str, required=True, help = 'path to file containing prompts')
+  parserList.add_argument('--prompt-file', type=str,
+                          required=True, help='path to file containing prompts')
   parserList.set_defaults(func=executeGenerateImages)
 
   subCommandArgs = parser.parse_args(args)
